@@ -1,0 +1,383 @@
+<!--
+weather_dashboard_frontend.html
+Single-file frontend for the WeatherLab dashboard.
+Includes: responsive navbar, dashboard cards, Chart.js forecast plot, simple settings modal,
+and JavaScript hooks that call backend endpoints:
+  - GET  /api/current-weather    -> { current: { temp, humidity, location }, recent_temps: [..] }
+  - POST /predict                -> { horizon_hours: N, predictions: [..] }
+
+If those endpoints are not available, the page runs in DEMO mode with generated data.
+Drop this file into any static host (or open locally) and edit endpoint URLs in the `CONFIG` object.
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WeatherLab — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --muted: #6b7280;
+      --accent: #0ea5e9; /* sky-500 */
+      --glass: rgba(255,255,255,0.7);
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%; margin:0; background:linear-gradient(180deg, #f6f8fb 0%, #eef2f6 100%); color:#111827}
+    a{color:inherit}
+
+    /* NAVBAR */
+    .navbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--card);box-shadow:0 6px 18px rgba(15,23,42,0.06);position:sticky;top:0;z-index:30}
+    .brand{display:flex;align-items:center;gap:12px}
+    .brand .logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#7c3aed);display:flex;align-items:center;justify-content:center;color:white;font-weight:700}
+    .brand .title{line-height:1}
+    .brand .title .name{font-weight:700}
+    .navlinks{display:flex;gap:14px;align-items:center}
+    .btn{padding:8px 12px;border-radius:8px;border:0;cursor:pointer;font-weight:600}
+    .btn-primary{background:var(--accent);color:white}
+    .btn-ghost{background:transparent;color:var(--muted)}
+
+    /* LAYOUT */
+    .container{max-width:1200px;margin:28px auto;padding:0 18px}
+    .grid{display:grid;gap:18px}
+    .grid-3{grid-template-columns:repeat(3,1fr)}
+    .grid-main{grid-template-columns:1fr 420px}
+
+    .card{background:var(--card);padding:18px;border-radius:14px;box-shadow:0 6px 18px rgba(15,23,42,0.04)}
+    .small{font-size:13px;color:var(--muted)}
+
+    /* cards */
+    .stat{display:flex;flex-direction:column;gap:6px}
+    .stat .value{font-size:28px;font-weight:700}
+    .stat .label{font-size:13px;color:var(--muted)}
+
+    .forecast-legend{display:flex;gap:10px;align-items:center}
+    .pill{padding:6px 10px;border-radius:999px;background:var(--glass);font-size:13px}
+
+    /* list */
+    .list{display:flex;flex-direction:column;gap:10px}
+    .list .item{display:flex;justify-content:space-between;align-items:center;padding:10px;border-radius:10px}
+
+    /* responsive */
+    @media (max-width:980px){
+      .grid-3{grid-template-columns:1fr}
+      .grid-main{grid-template-columns:1fr}
+      .navlinks{display:none}
+    }
+
+    footer{max-width:1200px;margin:24px auto;padding:0 18px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <header class="navbar">
+    <div class="brand">
+      <div class="logo">W</div>
+      <div>
+        <div class="name">WeatherLab</div>
+        <div class="small">Forecast dashboard</div>
+      </div>
+    </div>
+
+    <nav class="navlinks">
+      <a href="#" class="small">Dashboard</a>
+      <a href="#" class="small">Maps</a>
+      <a href="#" class="small">History</a>
+      <a href="#" class="small">Settings</a>
+      <button id="refreshBtn" class="btn btn-primary">Update</button>
+    </nav>
+
+    <!-- mobile actions -->
+    <div class="mobile-actions">
+      <button id="mobileUpdate" class="btn btn-primary" style="display:none">Upd</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="grid grid-3">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div class="small">Location</div>
+            <div style="font-weight:700;font-size:18px" id="locName">Unknown</div>
+          </div>
+          <div style="text-align:right">
+            <div class="small">Last update</div>
+            <div id="lastUpdated" class="small">—</div>
+          </div>
+        </div>
+        <hr style="margin:12px 0;border:none;border-top:1px solid #eef2f6">
+        <div style="display:flex;gap:18px;align-items:center">
+          <div style="flex:1">
+            <div class="stat">
+              <div class="value" id="tempNow">— °C</div>
+              <div class="small">Feels like <span id="feelsLike">—</span></div>
+            </div>
+          </div>
+          <div style="width:1px;height:60px;background:#f0f3f7;border-radius:2px"></div>
+          <div style="width:150px">
+            <div class="small">Humidity</div>
+            <div style="font-weight:700;font-size:18px" id="humidity">— %</div>
+            <div style="height:8px;background:#f0f3f7;border-radius:6px;margin-top:8px;overflow:hidden">
+              <div id="humBar" style="height:8px;border-radius:6px;background:linear-gradient(90deg,var(--accent),#7c3aed);width:50%"></div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+          <span class="pill">Hourly</span>
+          <span class="pill">3-hr</span>
+          <span class="pill">24-hr</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div class="small">Quick Stats</div>
+            <div style="font-weight:700">Current conditions</div>
+          </div>
+        </div>
+        <div style="margin-top:12px" class="list">
+          <div class="item"><div class="small">Wind</div><div id="windVal">—</div></div>
+          <div class="item"><div class="small">Pressure</div><div id="pressureVal">—</div></div>
+          <div class="item"><div class="small">Visibility</div><div id="visVal">—</div></div>
+        </div>
+      </div>
+
+      <div class="card" id="alertsCard">
+        <div class="small">Alerts</div>
+        <div style="margin-top:10px;font-weight:700" id="alertsText">No active alerts</div>
+      </div>
+    </section>
+
+    <section style="margin-top:18px" class="grid grid-main">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <div class="small">Forecast</div>
+            <div style="font-weight:700">Temperature Trend (recent + predicted)</div>
+          </div>
+          <div class="forecast-legend small">
+            <div style="display:flex;gap:6px;align-items:center"><span style="width:10px;height:10px;background:rgba(14,165,233,0.9);border-radius:3px;display:inline-block"></span> Observed</div>
+            <div style="display:flex;gap:6px;align-items:center"><span style="width:10px;height:10px;background:rgba(124,58,237,0.9);border-radius:3px;display:inline-block"></span> Predicted</div>
+          </div>
+        </div>
+        <canvas id="forecastChart" height="160"></canvas>
+      </div>
+
+      <aside>
+        <div class="card">
+          <div class="small">Upcoming (6 hours)</div>
+          <div id="upcomingList" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <div class="small">Controls</div>
+          <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
+            <label class="small">Model horizon (hours)
+              <input id="horizonInput" type="number" min="1" max="48" value="6" style="width:100%;margin-top:6px;padding:8px;border-radius:8px;border:1px solid #e6edf3">
+            </label>
+            <button id="runPred" class="btn btn-primary">Run prediction</button>
+            <button id="demoToggle" class="btn btn-ghost">Toggle demo data</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer>
+    Built with ♥ — WeatherLab UI • Open-source demo
+  </footer>
+
+  <script>
+    /***********************
+     * CONFIG
+     ***********************/
+    const CONFIG = {
+      CURRENT_WEATHER_URL: '/api/current-weather', // GET
+      PREDICT_URL: '/predict', // POST
+      N_LAGS: 48
+    };
+
+    // Demo mode when backend endpoints are unreachable
+    let DEMO = false;
+
+    /***********************
+     * Utilities
+     ***********************/
+    function nowISO(){ return new Date().toLocaleString(); }
+
+    function el(id){ return document.getElementById(id); }
+
+    function setText(id, v){ const e = el(id); if(e) e.textContent = v; }
+
+    function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+    /***********************
+     * Demo data generator
+     ***********************/
+    function generateDemoRecent(n){
+      const base = 25 + Math.sin(Date.now() / 300000) * 3; // slow wave
+      const arr = [];
+      for(let i=0;i<n;i++){
+        arr.unshift(+((base + Math.sin(i/3) + (Math.random()-0.5)*0.6).toFixed(2)));
+      }
+      return arr;
+    }
+
+    function demoPredict(recent, horizon){
+      const last = recent[recent.length-1] ?? 25;
+      const preds = [];
+      for(let i=1;i<=horizon;i++){
+        preds.push(+(last + Math.sin(i/3) * 0.8 + (Math.random()-0.5)*0.6).toFixed(2));
+      }
+      return preds;
+    }
+
+    /***********************
+     * Chart init
+     ***********************/
+    let forecastChart = null;
+    function initChart(){
+      const ctx = document.getElementById('forecastChart').getContext('2d');
+      forecastChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            { label: 'Observed', data: [], tension:0.3, pointRadius:2, borderWidth:2, borderColor:'rgba(14,165,233,0.9)' },
+            { label: 'Predicted', data: [], tension:0.3, pointRadius:2, borderWidth:2, borderColor:'rgba(124,58,237,0.95)' }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: true } },
+          scales: { y: { beginAtZero:false } }
+        }
+      });
+    }
+
+    function updateChart(recent, preds){
+      const labels = [];
+      const observed = [];
+      const predicted = [];
+      const now = new Date();
+
+      // recent labels: T - n ... T
+      for(let i=recent.length-1;i>=0;i--){
+        labels.push(`T-${i}h`);
+        observed.push(recent[recent.length-1 - i]);
+        predicted.push(null);
+      }
+      // prediction labels
+      for(let i=0;i<preds.length;i++){
+        labels.push(`T+${i+1}h`);
+        observed.push(null);
+        predicted.push(preds[i]);
+      }
+
+      forecastChart.data.labels = labels;
+      forecastChart.data.datasets[0].data = observed;
+      forecastChart.data.datasets[1].data = predicted;
+      forecastChart.update();
+    }
+
+    /***********************
+     * UI population
+     ***********************/
+    async function fetchCurrentWeather(){
+      // tries to call the backend; on failure, switches to DEMO
+      try{
+        const res = await fetch(CONFIG.CURRENT_WEATHER_URL);
+        if(!res.ok) throw new Error('not ok');
+        const data = await res.json();
+        return data;
+      }catch(err){
+        console.warn('Using demo weather data (backend unreachable)', err);
+        DEMO = true;
+        return {
+          current: { temp:25.2, humidity:56, feels_like:25.0, wind:'6 km/h', pressure:1012 },
+          recent_temps: generateDemoRecent(CONFIG.N_LAGS)
+        };
+      }
+    }
+
+    async function callPredict(recent, horizon){
+      try{
+        if(DEMO){
+          await sleep(300);
+          return { horizon_hours: horizon, predictions: demoPredict(recent, horizon) };
+        }
+        const res = await fetch(CONFIG.PREDICT_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ recent_temps: recent }) });
+        if(!res.ok) throw new Error('predict failed');
+        return await res.json();
+      }catch(err){
+        console.warn('Predict failed; using demo preds', err);
+        return { horizon_hours: horizon, predictions: demoPredict(recent, horizon) };
+      }
+    }
+
+    function populateQuickStats(curr){
+      setText('tempNow', (curr.temp ? curr.temp+' °C' : '—'));
+      setText('feelsLike', curr.feels_like ?? '—');
+      setText('humidity', (curr.humidity ? curr.humidity+' %' : '—'));
+      setText('windVal', curr.wind ?? '—');
+      setText('pressureVal', curr.pressure ? curr.pressure+' hPa' : '—');
+      setText('visVal', curr.visibility ? curr.visibility + ' km' : '—');
+      const hum = curr.humidity ?? 50; el('humBar').style.width = Math.min(100,Math.max(2,hum)) + '%';
+    }
+
+    function populateUpcoming(preds){
+      const list = el('upcomingList'); list.innerHTML = '';
+      preds.slice(0,6).forEach((p,i)=>{
+        const div = document.createElement('div');
+        div.style.display='flex'; div.style.justifyContent='space-between'; div.style.alignItems='center'; div.style.padding='8px'; div.style.borderRadius='8px';
+        div.style.background='linear-gradient(180deg, rgba(255,255,255,0.8), rgba(250,250,252,0.9))';
+        div.innerHTML = `<div style="font-weight:600">T+${i+1}h</div><div style="font-weight:700">${p} °C</div>`;
+        list.appendChild(div);
+      });
+    }
+
+    /***********************
+     * Main flow
+     ***********************/
+    async function refreshAll(){
+      setText('lastUpdated', 'Updating...');
+      const data = await fetchCurrentWeather();
+      const current = data.current ?? data;
+      setText('locName', current.location ?? 'Unknown location');
+      setText('lastUpdated', nowISO());
+      populateQuickStats(current);
+
+      const recent = data.recent_temps ?? generateDemoRecent(CONFIG.N_LAGS);
+      const horizon = parseInt(el('horizonInput').value || '6');
+      const predRes = await callPredict(recent, horizon);
+      updateChart(recent, predRes.predictions);
+      populateUpcoming(predRes.predictions);
+    }
+
+    // Event bindings
+    document.addEventListener('DOMContentLoaded', ()=>{
+      initChart();
+      refreshAll();
+
+      el('runPred').addEventListener('click', async ()=>{
+        el('runPred').disabled = true; el('runPred').textContent = 'Running...';
+        await refreshAll();
+        el('runPred').disabled = false; el('runPred').textContent = 'Run prediction';
+      });
+
+      el('demoToggle').addEventListener('click', ()=>{ DEMO = !DEMO; el('demoToggle').textContent = DEMO ? 'Demo: ON' : 'Demo: OFF'; });
+
+      el('refreshBtn').addEventListener('click', async ()=>{ await refreshAll(); });
+    });
+  </script>
+</body>
+</html>
