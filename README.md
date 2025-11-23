@@ -9,7 +9,7 @@ Easily calculate the tip amount and split the bill between people.
 
 ## 🚀 Demo
 
-🔗 [Live Demo](https://coding-smit.github.io/Portfolio-smit/) &nbsp; 
+🔗 [Live Demo](https://coding-smit.github.io/Weather-Prediction-Model-dashboard/) &nbsp; 
 
 ---
 ## ✨ Features
